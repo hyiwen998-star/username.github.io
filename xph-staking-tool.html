@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPH Staking Pro 工具</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #0f172a, #1e2937); }
+        .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(12px); }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+<div class="max-w-2xl mx-auto p-6">
+    <div class="glass rounded-3xl shadow-2xl p-8 border border-white/10">
+        <h1 class="text-4xl font-bold text-center mb-2 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+            XPH Staking Pro
+        </h1>
+        <p class="text-center text-gray-400 mb-8">支持多钱包 · 余额查询 · 一键授权</p>
+
+        <div class="flex justify-between items-center mb-6">
+            <button onclick="connectWallet()" id="connectBtn"
+                    class="px-8 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-2xl transition">
+                连接钱包
+            </button>
+            <div id="accountInfo" class="text-sm text-right"></div>
+        </div>
+
+        <!-- 网络切换 -->
+        <div class="mb-6">
+            <label class="block text-sm mb-2">选择网络</label>
+            <select id="chainSelect" onchange="switchChain()" 
+                    class="w-full bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3">
+                <option value="">-- 请选择网络 --</option>
+                <option value="0x1">Ethereum</option>
+                <option value="0x38">BSC</option>
+                <option value="0x89">Polygon</option>
+            </select>
+        </div>
+
+        <!-- 合约地址 -->
+        <div class="mb-6">
+            <label class="block text-sm mb-2">Staking 合约地址</label>
+            <input id="contractAddr" type="text" placeholder="0x..." 
+                   class="w-full bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3 focus:border-cyan-500">
+        </div>
+
+        <!-- 余额显示 -->
+        <div class="glass rounded-3xl p-6 mb-6 grid grid-cols-2 gap-4 text-sm">
+            <div>XPH 余额: <span id="xphBalance" class="font-bold text-emerald-400">0</span></div>
+            <div>sXPH 余额: <span id="sxphBalance" class="font-bold text-cyan-400">0</span></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <!-- 质押区 -->
+            <div class="glass rounded-3xl p-6">
+                <h3 class="font-semibold mb-4 text-emerald-400">🔒 质押</h3>
+                <input id="stakeAmount" type="text" placeholder="XPH 数量" 
+                       class="w-full bg-slate-900 border border-slate-700 rounded-2xl px-4 py-3 mb-3">
+                <button onclick="approveAndStake()" 
+                        class="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-bold rounded-2xl">
+                    授权并质押
+                </button>
+            </div>
+
+            <!-- 提币区 -->
+            <div class="glass rounded-3xl p-6">
+                <h3 class="font-semibold mb-4 text-orange-400">💰 提币</h3>
+                <input id="unstakeAmount" type="text" placeholder="sXPH 数量" 
+                       class="w-full bg-slate-900 border border-slate-700 rounded-2xl px-4 py-3 mb-3">
+                <button onclick="unstake()" 
+                        class="w-full py-4 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-2xl">
+                    解除质押
+                </button>
+            </div>
+        </div>
+
+        <div class="flex gap-4 mt-6">
+            <button onclick="claim()" class="flex-1 py-4 bg-blue-600 hover:bg-blue-500 font-semibold rounded-2xl">领取 Claim</button>
+            <button onclick="rebase()" class="flex-1 py-4 bg-purple-600 hover:bg-purple-500 font-semibold rounded-2xl">一键 Rebase</button>
+        </div>
+
+        <!-- 信息面板 -->
+        <div class="glass rounded-3xl p-6 mt-8">
+            <div class="flex justify-between mb-3">
+                <h3 class="font-semibold">📊 详细状态</h3>
+                <button onclick="getInfo()" class="text-cyan-400 hover:underline text-sm">刷新数据</button>
+            </div>
+            <pre id="infoDisplay" class="bg-slate-950 p-5 rounded-2xl text-sm overflow-auto max-h-80 whitespace-pre-wrap"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+// ================== 请在此粘贴完整的 ABI ==================
+const STAKING_ABI = [ /* ←←← 把您最开始提供的整个 ABI JSON 数组粘贴到这里 */ ];
+
+let provider, signer, stakingContract, userAddress, xphContract, sxphContract;
+
+async function connectWallet() {
+    if (!window.ethereum) return alert("未检测到钱包");
+
+    provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = provider.getSigner();
+    userAddress = await signer.getAddress();
+
+    document.getElementById("accountInfo").innerHTML = `✅ 已连接<br><span class="text-xs">${userAddress.slice(0,8)}...${userAddress.slice(-6)}</span>`;
+
+    const network = await provider.getNetwork();
+    document.getElementById("chainSelect").value = "0x" + network.chainId.toString(16);
+
+    const contractAddr = document.getElementById("contractAddr").value;
+    stakingContract = new ethers.Contract(contractAddr, STAKING_ABI, signer);
+
+    // 获取 XPH 和 sXPH 地址
+    const xphAddr = await stakingContract.XPH();
+    const sxphAddr = await stakingContract.sXPH();
+
+    const ERC20_ABI = ["function balanceOf(address) view returns (uint256)", "function approve(address,uint256)"];
+    xphContract = new ethers.Contract(xphAddr, ERC20_ABI, signer);
+    sxphContract = new ethers.Contract(sxphAddr, ERC20_ABI, signer);
+
+    getInfo();
+    getBalances();
+}
+
+async function getBalances() {
+    if (!xphContract || !sxphContract) return;
+    try {
+        const xphBal = await xphContract.balanceOf(userAddress);
+        const sxphBal = await sxphContract.balanceOf(userAddress);
+        document.getElementById("xphBalance").textContent = ethers.utils.formatUnits(xphBal, 18);
+        document.getElementById("sxphBalance").textContent = ethers.utils.formatUnits(sxphBal, 18);
+    } catch(e) {}
+}
+
+async function approveAndStake() {
+    const amount = document.getElementById("stakeAmount").value;
+    if (!amount) return alert("请输入数量");
+
+    const contractAddr = document.getElementById("contractAddr").value;
+    const parsedAmount = ethers.utils.parseUnits(amount, 18);
+
+    try {
+        // 先授权
+        const approveTx = await xphContract.approve(contractAddr, parsedAmount);
+        alert("授权交易已发送，正在等待确认...");
+        await approveTx.wait();
+        alert("✅ 授权成功！");
+
+        // 再质押
+        const stakeTx = await stakingContract.stake(parsedAmount, userAddress);
+        alert("质押交易已发送！Hash: " + stakeTx.hash);
+        await stakeTx.wait();
+        alert("✅ 质押成功！");
+        getBalances();
+        getInfo();
+    } catch (e) {
+        alert("操作失败: " + e.message);
+    }
+}
+
+async function unstake() {
+    const amount = document.getElementById("unstakeAmount").value;
+    if (!amount || !stakingContract) return alert("请输入数量");
+    try {
+        const tx = await stakingContract.unstake(ethers.utils.parseUnits(amount, 18), true);
+        await tx.wait();
+        alert("✅ 提币成功！");
+        getBalances();
+        getInfo();
+    } catch (e) { alert(e.message); }
+}
+
+async function claim() {
+    if (!stakingContract) return;
+    try {
+        const tx = await stakingContract.claim(userAddress);
+        await tx.wait();
+        alert("✅ 领取成功！");
+        getBalances();
+        getInfo();
+    } catch (e) { alert(e.message); }
+}
+
+async function rebase() {
+    if (!stakingContract) return;
+    try {
+        const tx = await stakingContract.rebase();
+        await tx.wait();
+        alert("✅ Rebase 执行成功！");
+        getInfo();
+    } catch (e) { alert(e.message); }
+}
+
+async function getInfo() {
+    if (!stakingContract) return;
+    try {
+        const epoch = await stakingContract.epoch();
+        const warmup = await stakingContract.warmupInfo(userAddress);
+        const totalBonus = await stakingContract.totalBonus();
+
+        let str = `当前 Epoch: ${epoch.number}\n`;
+        str += `Epoch 结束区块: ${epoch.endBlock}\n`;
+        str += `待分发数量: ${ethers.utils.formatUnits(epoch.distribute, 18)}\n\n`;
+        str += `暖身存款: ${ethers.utils.formatUnits(warmup.deposit, 18)} sXPH\n`;
+        str += `到期时间: ${warmup.expiry > 0 ? new Date(warmup.expiry*1000).toLocaleString() : '无'}\n`;
+        str += `锁定状态: ${warmup.lock ? '已锁定' : '未锁定'}\n`;
+        str += `总奖金: ${ethers.utils.formatUnits(totalBonus, 18)}`;
+
+        document.getElementById("infoDisplay").textContent = str;
+    } catch(e) {
+        document.getElementById("infoDisplay").textContent = "读取失败，请确认合约地址正确";
+    }
+}
+
+async function switchChain() {
+    const chainId = document.getElementById("chainSelect").value;
+    if (chainId) {
+        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] });
+    }
+}
+</script>
+</body>
+</html>
